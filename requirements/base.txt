@@ -1,0 +1,7 @@
+pydantic==2.9.2
+pydantic-settings==2.6.1
+SQLAlchemy==2.0.36
+psycopg[binary]==3.2.3
+pandas==2.2.3
+numpy==1.26.4
+PyYAML==6.0.2

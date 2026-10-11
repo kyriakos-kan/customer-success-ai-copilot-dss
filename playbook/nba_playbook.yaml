@@ -1,0 +1,82 @@
+# Next-best-action playbook — edited by Customer Success, not by engineers.
+# Rules are matched top to bottom by specificity score; "*" matches anything.
+# `when_factor` (optional) matches if that feature is among the account's
+# top risk-increasing factors. Every (risk_level, segment) pair must resolve:
+# the last rule is the catch-all and is checked by tests/test_playbook.py.
+
+rules:
+  - id: high-quality-escalate
+    risk_level: high
+    segment: "*"
+    when_factor: quality_complaints_12m
+    action: escalate_quality_review
+    channel: call
+    owner: account_manager
+    rationale: Quality issues are driving risk; involve QA with batch lab reports before any commercial offer.
+
+  - id: high-payment-terms
+    risk_level: high
+    segment: "*"
+    when_factor: late_payments_12m
+    action: offer_payment_plan_review
+    channel: call
+    owner: account_manager
+    rationale: Payment pressure is the main driver; a terms conversation protects the relationship and receivables.
+
+  - id: high-leadtime
+    risk_level: high
+    segment: "*"
+    when_factor: avg_lead_time_days
+    action: propose_stock_programme
+    channel: email
+    owner: account_manager
+    rationale: Lead time is the pain point; propose a held-stock or Greek-origin alternative for core articles.
+
+  - id: high-champion
+    risk_level: high
+    segment: champion
+    action: executive_call
+    channel: call
+    owner: export_director
+    rationale: High-value account at risk; senior-level contact within 48 hours.
+
+  - id: high-default
+    risk_level: high
+    segment: "*"
+    action: schedule_call
+    channel: call
+    owner: account_manager
+    rationale: Elevated churn risk; open a conversation to understand what changed.
+
+  - id: medium-volume-drop
+    risk_level: medium
+    segment: "*"
+    when_factor: order_volume_change_pct
+    action: send_reorder_incentive
+    channel: email
+    owner: customer_success
+    rationale: Volume is slipping; a time-bound rebate or sample pack nudges the next order.
+
+  - id: medium-loyal
+    risk_level: medium
+    segment: loyal
+    action: renewal_offer
+    channel: email
+    owner: customer_success
+    rationale: Loyal customer showing early signals; secure the next season with a renewal offer.
+
+  - id: medium-default
+    risk_level: medium
+    segment: "*"
+    action: check_in_email
+    channel: email
+    owner: customer_success
+    rationale: Early warning signals; a personal check-in with relevant news.
+
+  - id: catch-all
+    risk_level: "*"
+    segment: "*"
+    action: monitor
+    channel: none
+    owner: customer_success
+    rationale: No action needed this cycle; keep monitoring.

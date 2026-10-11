@@ -1,0 +1,12 @@
+.env
+.venv*/
+__pycache__/
+notebooks/_dev/
+models/
+*.db
+.venv-demo/
+demo/_data/
+
+# Real business exports (customer emails, ERP extracts): never commit
+data/*
+!data/README.md

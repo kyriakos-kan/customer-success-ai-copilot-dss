@@ -1,0 +1,5 @@
+streamlit==1.40.2
+# pyarrow 19+ needs NumPy 2; we pin NumPy 1.26 (chromadb-client), so pin pyarrow too
+pyarrow==18.1.0
+requests==2.32.3
+pandas==2.2.3

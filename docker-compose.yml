@@ -1,0 +1,83 @@
+name: cs_ai_copilot_dss
+
+x-app-env: &app-env
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    CHROMA_HOST: vectorstore
+    CHROMA_PORT: "8000"
+    MODEL_DIR: /models
+    # Ollama runs on the host machine, not in a container
+    OLLAMA_URL: ${OLLAMA_URL_DOCKER:-http://host.docker.internal:11434}
+
+services:
+  db:
+    image: postgres:16-alpine
+    env_file: .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  vectorstore:
+    image: chromadb/chroma:${CHROMA_VERSION:-0.5.23}
+    volumes:
+      - chromadata:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    restart: unless-stopped
+    # The Chroma image ships without curl, so readiness is handled by
+    # client-side retries in src/copilot/rag.py instead of a healthcheck.
+
+  pipeline:
+    build: { context: ., dockerfile: docker/Dockerfile, target: pipeline }
+    <<: *app-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # lets Linux hosts reach Ollama too
+    volumes:
+      - models:/models            # pipeline WRITES trained models
+      - ./playbook:/app/playbook:ro  # CS edits the playbook live, no rebuild
+      - ./data:/data:ro           # real exports (emails, outcomes): read-only, never committed
+    depends_on:
+      db: { condition: service_healthy }
+      vectorstore: { condition: service_started }
+    restart: unless-stopped
+
+  api:
+    build: { context: ., dockerfile: docker/Dockerfile, target: api }
+    <<: *app-env
+    volumes:
+      - models:/models:ro         # api only READS models
+      - ./playbook:/app/playbook:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      db: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build: { context: ., dockerfile: docker/Dockerfile, target: frontend }
+    environment:
+      API_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  chromadata:
+  models:
