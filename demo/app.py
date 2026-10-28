@@ -428,14 +428,20 @@ elif page == "Feedback log":
 
     st.subheader("What the writer will see on the next cycle")
     actions = sorted(all_drafts.action.unique()) if len(all_drafts) else []
-    if actions:
-        act = st.selectbox("For drafts of type", actions, format_func=lambda a: ACTION_LABEL.get(a, a))
+    account_ids = sorted(all_drafts.account_id.dropna().unique()) if len(all_drafts) else []
+    if actions and account_ids:
+        account_id = st.selectbox(
+            "For account", account_ids,
+            format_func=lambda aid: names.get(aid, aid),
+        )
+        account_actions = sorted(all_drafts.loc[all_drafts.account_id == account_id, "action"].unique())
+        act = st.selectbox("For drafts of type", account_actions,
+                           format_func=lambda a: ACTION_LABEL.get(a, a))
         with SessionLocal() as s:
-            preview = prompt_block(writer_feedback(s, act))
+            preview = prompt_block(writer_feedback(s, act, account_id))
         if preview:
             st.code(preview, language=None, wrap_lines=True)
-            st.caption("This block is added to the writer's prompt, below the customer context. "
-                       "Same-type examples and corrections come first.")
+            st.caption("This account-scoped block is added to the writer's prompt, below its customer context.")
         else:
             st.caption("Nothing to learn from yet.")
 

@@ -59,7 +59,7 @@ def run_once(force_retrain: bool = False) -> dict:
         assessments.sort(key=lambda a: -a.revenue_at_risk)
 
         writer = WriterAgent(s.anthropic_api_key, s.writer_model, s.min_context_docs)
-        feedback_cache: dict[str, object] = {}       # one feedback lookup per action per run
+        feedback_cache: dict[tuple[str, str], object] = {}
         pending = set(session.scalars(select(Draft.account_id)
                                       .where(Draft.status == "pending_review")).all())
         since = datetime.now(timezone.utc) - timedelta(days=s.recontact_cooldown_days)
@@ -71,9 +71,7 @@ def run_once(force_retrain: bool = False) -> dict:
                   "recently_contacted": 0, "control": 0}
         llm_used = 0
         log.info("Writer: %s (LLM drafts per run: %s)", writer.label, s.llm_max_drafts or "no limit")
-        fb = writer_feedback(session, "")
-        log.info("Feedback log: %d approved examples, %d reviewer corrections available",
-                 len(fb.examples), len(fb.lessons))
+        log.info("Writer feedback is scoped to the target account and action")
 
         for a in assessments:
             control = in_control_group(a.account_id, s.control_group_pct)
@@ -97,10 +95,11 @@ def run_once(force_retrain: bool = False) -> dict:
             query = f"{rec.action} {' '.join(f['label'] for f in a.top_factors[:3])}"
             context = retriever.retrieve(a.account_id, query)
             use_llm = s.llm_max_drafts == 0 or llm_used < s.llm_max_drafts
-            if rec.action not in feedback_cache:
-                feedback_cache[rec.action] = writer_feedback(session, rec.action)
+            feedback_key = (a.account_id, rec.action)
+            if feedback_key not in feedback_cache:
+                feedback_cache[feedback_key] = writer_feedback(session, rec.action, a.account_id)
             d = writer.draft(acct["name"], a, rec, context, use_llm=use_llm,
-                             feedback=feedback_cache[rec.action])
+                             feedback=feedback_cache[feedback_key])
             if use_llm and writer.backend != "template" and context and d.status != "no_action":
                 llm_used += 1
             if d.status == "no_action":

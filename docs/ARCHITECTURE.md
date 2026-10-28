@@ -186,7 +186,11 @@ A decision without the required reason or explanation is refused (HTTP 422 from 
 
 ### How the writer uses it
 
-For each draft, the pipeline calls `writer_feedback(action)`, which returns:
+For each draft, the pipeline calls `writer_feedback(action, account_id)`, which filters both
+approved drafts and reviewer corrections to that exact account before applying action relevance
+and recency ordering. Feedback is never shared between accounts. The in-memory cache is keyed by
+`(account_id, action)`, and the writer rejects a feedback object whose account ID does not match
+the draft being written. The query returns:
 
 - up to **2 approved examples**, preferring the same type of action, newest first
 - up to **5 corrections**, preferring the same type of action, newest first
@@ -206,7 +210,8 @@ Reviewer CORRECTIONS on past drafts. Do not repeat these mistakes:
 
 The writer is told to copy the *style* of approved examples, never their facts. All the usual guardrails still apply: the draft must cite the customer's own documents, or it is discarded.
 
-The same block can be previewed before the next run on the demo's **Feedback log** page, in the API (`GET /feedback?action=…`), and at the end of notebook 03.
+The same account-scoped block can be previewed before the next run on the demo's **Feedback log**
+page, in the API (`GET /feedback?account_id=…&action=…`), and at the end of notebook 03.
 
 ### Which accounts are re-drafted
 
@@ -293,7 +298,7 @@ Tables are created automatically. When the code adds new columns, older database
 | `GET` | `/drafts?status=pending_review` | Drafts by status, including `feedback_used` |
 | `POST` | `/drafts/{id}/review` | Records a decision. Body: `reviewer`, `decision`, optional `edited_body`; `reason` + `explanation` required for needs_edit / rejected |
 | `GET` | `/feedback/reasons` | Reason codes and labels |
-| `GET` | `/feedback?action=…` | Approved examples, corrections, reason counts, and the prompt block the writer will see |
+| `GET` | `/feedback?account_id=…&action=…` | That account's approved examples, corrections, reason counts, and prompt block |
 | `GET` | `/feedback/export` | Training dataset: one record per decision |
 | `GET` | `/metrics` | Model metrics, approval rate, queue sizes |
 | `GET` | `/trust` | Trust metrics: review quality, flagged vs churned, contacted vs control, model card |

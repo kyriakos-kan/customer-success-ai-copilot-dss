@@ -80,6 +80,7 @@ def record_review(session: Session, draft_id: int, reviewer: str, decision: str,
 # --------------------------------------------------------------- what the writer learns
 @dataclass
 class WriterFeedback:
+    account_id: str
     examples: list[dict]          # [{"id", "action", "subject", "body"}]
     lessons: list[dict]           # [{"id", "action", "reason", "label", "explanation"}]
 
@@ -92,12 +93,12 @@ class WriterFeedback:
         return not self.examples and not self.lessons
 
 
-def writer_feedback(session: Session, action: str, n_examples: int = 2,
-                    n_lessons: int = 5) -> WriterFeedback:
-    """Approved drafts and reviewer corrections, same action first, newest first."""
+def writer_feedback(session: Session, action: str, account_id: str,
+                    n_examples: int = 2, n_lessons: int = 5) -> WriterFeedback:
+    """Return only this account's approved drafts and reviewer corrections."""
     approved = session.execute(
         select(Draft, ReviewEvent).join(ReviewEvent, ReviewEvent.draft_id == Draft.id)
-        .where(ReviewEvent.decision == "approved")
+        .where(ReviewEvent.decision == "approved", Draft.account_id == account_id)
         .order_by((Draft.action == action).desc(), ReviewEvent.created_at.desc())
         .limit(n_examples)).all()
     examples = [{"id": d.id, "action": d.action, "subject": d.subject, "body": d.body}
@@ -106,13 +107,13 @@ def writer_feedback(session: Session, action: str, n_examples: int = 2,
     corrections = session.execute(
         select(ReviewEvent, Draft).join(Draft, ReviewEvent.draft_id == Draft.id)
         .where(ReviewEvent.decision.in_(["rejected", "needs_edit"]),
-               ReviewEvent.comment.is_not(None))
+             ReviewEvent.comment.is_not(None), Draft.account_id == account_id)
         .order_by((Draft.action == action).desc(), ReviewEvent.created_at.desc())
         .limit(n_lessons)).all()
     lessons = [{"id": e.id, "action": d.action, "reason": e.reason,
                 "label": REASONS.get(e.reason or "other", "Other"), "explanation": e.comment}
                for e, d in corrections]
-    return WriterFeedback(examples, lessons)
+    return WriterFeedback(account_id, examples, lessons)
 
 
 def prompt_block(fb: WriterFeedback) -> str:

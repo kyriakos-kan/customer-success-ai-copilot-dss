@@ -132,11 +132,13 @@ def feedback_reasons():
 
 
 @app.get("/feedback")
-def feedback_log(action: str = "", session: Session = Depends(db)):
-    """What the writer will learn from on its next run, plus the reason breakdown."""
-    fb = writer_feedback(session, action)
+def feedback_log(account_id: str, action: str = "", session: Session = Depends(db)):
+    """What the writer will learn for one account, plus that account's reason breakdown."""
+    fb = writer_feedback(session, action, account_id)
     reasons = dict(session.execute(select(ReviewEvent.reason, func.count())
-                                   .where(ReviewEvent.reason.is_not(None))
+                                   .join(Draft, ReviewEvent.draft_id == Draft.id)
+                                   .where(ReviewEvent.reason.is_not(None),
+                                          Draft.account_id == account_id)
                                    .group_by(ReviewEvent.reason)).all())
     return {"approved_examples": fb.examples, "corrections": fb.lessons,
             "reason_counts": reasons, "prompt_preview": prompt_block(fb)}

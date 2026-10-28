@@ -229,6 +229,9 @@ class WriterAgent:
             f'<doc id="{c["id"]}" type="{c["metadata"]["doc_type"]}">{c["text"]}</doc>' for c in ctx)
         drivers = ", ".join(f'{f["label"]} ({f["value"]})' for f in a.top_factors
                             if f["direction"] == "increases risk") or "none"
+        if feedback is not None and feedback.account_id != a.account_id:
+            log.warning("Ignoring writer feedback scoped to a different account")
+            feedback = None
         if feedback is not None and not feedback.is_empty():
             from copilot.feedback import prompt_block
             learned = prompt_block(feedback)

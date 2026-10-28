@@ -77,10 +77,19 @@ def test_end_to_end_and_review_flow():
     m = c.get("/metrics").json()
     assert m["review"]["decisions"] == {"rejected": 1, "approved": 1} and m["model"]["churn_roc_auc"] > 0.6
 
-    fb = c.get("/feedback", params={"action": draft["action"]}).json()
+    assert c.get("/feedback", params={"action": draft["action"]}).status_code == 422
+    fb = c.get("/feedback", params={"account_id": second["account_id"],
+                                    "action": second["action"]}).json()
     assert fb["approved_examples"][0]["body"] == edited
-    assert fb["corrections"][0]["reason"] == "tone" and fb["reason_counts"] == {"tone": 1}
-    assert "APPROVED" in fb["prompt_preview"] and "lead with their shrinkage issue" in fb["prompt_preview"]
+    assert fb["corrections"] == [] and fb["reason_counts"] == {}
+    rejected_fb = c.get("/feedback", params={"account_id": draft["account_id"],
+                                             "action": draft["action"]}).json()
+    assert rejected_fb["approved_examples"] == []
+    assert rejected_fb["corrections"][0]["reason"] == "tone"
+    assert rejected_fb["reason_counts"] == {"tone": 1}
+    assert "APPROVED" in fb["prompt_preview"]
+    assert "lead with their shrinkage issue" not in fb["prompt_preview"]
+    assert "lead with their shrinkage issue" in rejected_fb["prompt_preview"]
 
     export = c.get("/feedback/export").json()
     pos = next(x for x in export if x["label"] == "positive")
@@ -117,6 +126,7 @@ def test_writer_prompt_contains_feedback():
 
     w = Spy(None, "m", backend="ollama")
     fb = WriterFeedback(
+        account_id="X",
         examples=[{"id": 7, "action": "escalate_quality_review", "subject": "Your last batches",
                    "body": "Dear team, we checked the lab reports..."}],
         lessons=[{"id": 3, "action": "escalate_quality_review", "reason": "tone",
@@ -129,6 +139,95 @@ def test_writer_prompt_contains_feedback():
     assert "Too formal; be warmer." in captured["prompt"]
     assert "Required JSON schema" in captured["prompt"]
     assert d.feedback_used == {"approved_examples": [7], "lessons": [3]}
+
+
+def test_writer_ignores_feedback_from_another_account():
+    import json
+    from copilot.feedback import WriterFeedback
+
+    captured = {}
+
+    class Spy(WriterAgent):
+        def _complete(self, system, prompt):
+            if "strict evidence verifier" in system:
+                return json.dumps({"draft_supported": True,
+                                   "claim_checks": [{"claim_index": 0, "supported": True}]})
+            captured["prompt"] = prompt
+            doc = prompt.split('<doc id="')[1].split('"')[0]
+            return json.dumps({
+                "status": "OK", "subject": "S", "body": "Complaint about shrinkage.",
+                "claims": [{"text": "Complaint about shrinkage.",
+                            "evidence": [{"doc_id": doc, "quote": "Complaint about shrinkage."}]}],
+            })
+
+    feedback = WriterFeedback(
+        account_id="OTHER",
+        examples=[{"id": 88, "action": "escalate_quality_review", "subject": "Private subject",
+                   "body": "Other customer's confidential detail."}],
+        lessons=[{"id": 89, "action": "escalate_quality_review", "reason": "other",
+                  "label": "Other", "explanation": "Other customer's private comment."}],
+    )
+    assessment = AccountAssessment("X", 1000, 0.8, 800, "high", [])
+    recommendation = Recommendation("r", "escalate_quality_review", "call", "am", "why")
+    context = [{"text": "Complaint about shrinkage.",
+                "metadata": {"doc_id": "X-0", "doc_type": "ticket"}}]
+
+    draft = Spy(None, "m", backend="ollama").draft(
+        "Acme (DE)", assessment, recommendation, context, feedback=feedback)
+
+    assert "Other customer's confidential detail" not in captured["prompt"]
+    assert "Other customer's private comment" not in captured["prompt"]
+    assert draft.feedback_used is None
+
+
+def test_writer_feedback_only_returns_rows_for_requested_account():
+    from uuid import uuid4
+
+    from copilot.db import Account, Draft, ReviewEvent, SessionLocal, init_db
+    from copilot.feedback import writer_feedback
+
+    init_db()
+    account_id = f"SCOPE-{uuid4().hex[:12]}"
+    other_account_id = f"SCOPE-{uuid4().hex[:12]}"
+    action = "escalate_quality_review"
+
+    with SessionLocal() as session:
+        session.add_all([
+            Account(account_id=account_id, name="Scope account", segment="loyal",
+                    supplier_origin="GR", features={}),
+            Account(account_id=other_account_id, name="Other account", segment="loyal",
+                    supplier_origin="GR", features={}),
+        ])
+        session.flush()
+        own_approved = Draft(run_id="feedback-scope", account_id=account_id, action=action,
+                             action_rationale="test", subject="Own approved", body="Own example",
+                             status="approved")
+        own_rejected = Draft(run_id="feedback-scope", account_id=account_id, action=action,
+                             action_rationale="test", subject="Own rejected", body="Own original",
+                             status="rejected")
+        other_approved = Draft(run_id="feedback-scope", account_id=other_account_id, action=action,
+                               action_rationale="test", subject="Other approved", body="SECRET EXAMPLE",
+                               status="approved")
+        other_rejected = Draft(run_id="feedback-scope", account_id=other_account_id, action=action,
+                               action_rationale="test", subject="Other rejected", body="Other original",
+                               status="rejected")
+        session.add_all([own_approved, own_rejected, other_approved, other_rejected])
+        session.flush()
+        session.add_all([
+            ReviewEvent(draft_id=own_approved.id, reviewer="test", decision="approved"),
+            ReviewEvent(draft_id=own_rejected.id, reviewer="test", decision="rejected",
+                        reason="tone", comment="Own account comment."),
+            ReviewEvent(draft_id=other_approved.id, reviewer="test", decision="approved"),
+            ReviewEvent(draft_id=other_rejected.id, reviewer="test", decision="rejected",
+                        reason="other", comment="OTHER ACCOUNT SECRET COMMENT."),
+        ])
+        session.commit()
+
+        feedback = writer_feedback(session, action, account_id)
+
+    assert feedback.account_id == account_id
+    assert [example["body"] for example in feedback.examples] == ["Own example"]
+    assert [lesson["explanation"] for lesson in feedback.lessons] == ["Own account comment."]
 
 
 def test_writer_rejects_claim_not_supported_by_cited_document():

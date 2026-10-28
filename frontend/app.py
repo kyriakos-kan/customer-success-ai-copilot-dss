@@ -82,18 +82,25 @@ if page == "Review queue":
 
 elif page == "Feedback log":
     st.header("Feedback log")
-    st.caption("Approved drafts become examples for the writer; rejections with reasons become corrections.")
-    fb = get("/feedback")
-    c1, c2 = st.columns(2)
-    c1.metric("Approved examples in use", len(fb["approved_examples"]))
-    c2.metric("Corrections in use", len(fb["corrections"]))
-    if fb["reason_counts"]:
-        st.bar_chart(pd.Series({REASONS.get(k, k): v for k, v in fb["reason_counts"].items()}))
-    if fb["corrections"]:
-        st.dataframe(pd.DataFrame(fb["corrections"])[["action", "label", "explanation"]],
-                     hide_index=True, use_container_width=True)
-    st.subheader("What the writer will see next run")
-    st.code(fb["prompt_preview"] or "Nothing to learn from yet.", language=None, wrap_lines=True)
+    accounts = get("/accounts")
+    if not accounts:
+        st.info("No scored accounts are available yet.")
+    else:
+        account = st.selectbox(
+            "Account", accounts,
+            format_func=lambda row: f"{row['name']} ({row['account_id']})",
+        )
+        fb = get("/feedback", account_id=account["account_id"])
+        c1, c2 = st.columns(2)
+        c1.metric("Approved examples in use", len(fb["approved_examples"]))
+        c2.metric("Corrections in use", len(fb["corrections"]))
+        if fb["reason_counts"]:
+            st.bar_chart(pd.Series({REASONS.get(k, k): v for k, v in fb["reason_counts"].items()}))
+        if fb["corrections"]:
+            st.dataframe(pd.DataFrame(fb["corrections"])[["action", "label", "explanation"]],
+                         hide_index=True, use_container_width=True)
+        st.subheader(f"What the writer will see for {account['name']}")
+        st.code(fb["prompt_preview"] or "Nothing to learn from yet.", language=None, wrap_lines=True)
     records = get("/feedback/export")
     st.download_button("Download training dataset (JSON Lines)",
                        "\n".join(json.dumps(r, ensure_ascii=False) for r in records),
