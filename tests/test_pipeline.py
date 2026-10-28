@@ -103,10 +103,17 @@ def test_writer_prompt_contains_feedback():
 
     class Spy(WriterAgent):
         def _complete(self, system, prompt):
+            import json
+            if "strict evidence verifier" in system:
+                return json.dumps({"draft_supported": True,
+                                   "claim_checks": [{"claim_index": 0, "supported": True}]})
             captured["prompt"] = prompt
             doc = prompt.split('<doc id="')[1].split('"')[0]
-            import json
-            return json.dumps({"status": "OK", "subject": "S", "body": "B", "cited_ids": [doc]})
+            return json.dumps({
+                "status": "OK", "subject": "S", "body": "Complaint about shrinkage.",
+                "claims": [{"text": "Complaint about shrinkage.",
+                            "evidence": [{"doc_id": doc, "quote": "Complaint about shrinkage."}]}],
+            })
 
     w = Spy(None, "m", backend="ollama")
     fb = WriterFeedback(
@@ -120,7 +127,127 @@ def test_writer_prompt_contains_feedback():
     d = w.draft("Acme (DE)", a, rec, ctx, feedback=fb)
     assert "we checked the lab reports" in captured["prompt"]
     assert "Too formal; be warmer." in captured["prompt"]
+    assert "Required JSON schema" in captured["prompt"]
     assert d.feedback_used == {"approved_examples": [7], "lessons": [3]}
+
+
+def test_writer_rejects_claim_not_supported_by_cited_document():
+    import json
+
+    class UnsupportedSpy(WriterAgent):
+        def _complete(self, system, prompt):
+            if "strict evidence verifier" in system:
+                return json.dumps({"draft_supported": False,
+                                   "claim_checks": [{"claim_index": 0, "supported": False}]})
+            return json.dumps({
+                "status": "OK", "subject": "Refund request", "body": "You asked us for a refund.",
+                "claims": [{"text": "You asked us for a refund.",
+                            "evidence": [{"doc_id": "X-0", "quote": "Complaint about shrinkage."}]}],
+            })
+
+    a = AccountAssessment("X", 1000, 0.8, 800, "high", [])
+    rec = Recommendation("r", "escalate_quality_review", "call", "am", "why")
+    ctx = [{"text": "Complaint about shrinkage.",
+            "metadata": {"doc_id": "X-0", "doc_type": "ticket"}}]
+
+    draft = UnsupportedSpy(None, "m", backend="ollama").draft("Acme (DE)", a, rec, ctx)
+
+    assert draft.status == "pending_review"
+    assert "refund" not in draft.body.lower()
+    assert draft.context_used[0]["id"] == "X-0"
+
+
+def test_writer_rejects_evidence_quote_not_in_retrieved_document():
+    import json
+
+    class InvalidQuoteSpy(WriterAgent):
+        calls = 0
+
+        def _complete(self, system, prompt):
+            self.calls += 1
+            return json.dumps({
+                "status": "OK", "subject": "Refund request", "body": "You asked us for a refund.",
+                "claims": [{"text": "You asked us for a refund.",
+                            "evidence": [{"doc_id": "X-0", "quote": "They requested a refund."}]}],
+            })
+
+    a = AccountAssessment("X", 1000, 0.8, 800, "high", [])
+    rec = Recommendation("r", "escalate_quality_review", "call", "am", "why")
+    ctx = [{"text": "Complaint about shrinkage.",
+            "metadata": {"doc_id": "X-0", "doc_type": "ticket"}}]
+    writer = InvalidQuoteSpy(None, "m", backend="ollama")
+
+    draft = writer.draft("Acme (DE)", a, rec, ctx)
+
+    assert writer.calls == 1
+    assert draft.status == "pending_review"
+    assert "refund" not in draft.body.lower()
+
+
+def test_writer_matches_normalized_claim_in_subject_and_exempts_body_conventions():
+    import json
+
+    class NormalizedSpy(WriterAgent):
+        def _complete(self, system, prompt):
+            if "strict evidence verifier" in system:
+                return json.dumps({"draft_supported": True,
+                                   "claim_checks": [{"claim_index": 0, "supported": True}]})
+            return json.dumps({
+                "status": "OK",
+                "subject": "THE CUSTOMER SAID “THE BATCH SHRANK” AFTER DELIVERY",
+                "body": "Dear Acme team,\n\nWould you have 20 minutes for a call?\n\n"
+                        "Kind regards,\n[Account owner]\n[Company name]",
+                "claims": [{
+                    "text": 'The customer said "the batch shrank" after delivery',
+                    "evidence": [{
+                        "doc_id": "X-0",
+                        "quote": 'THE   CUSTOMER SAID "THE BATCH SHRANK" AFTER DELIVERY.',
+                    }],
+                }],
+            })
+
+    a = AccountAssessment("X", 1000, 0.8, 800, "high", [])
+    rec = Recommendation("r", "escalate_quality_review", "call", "am", "why")
+    ctx = [{"text": "The customer said “the batch shrank” after delivery.",
+            "metadata": {"doc_id": "X-0", "doc_type": "ticket"}}]
+
+    draft = NormalizedSpy(None, "m", backend="ollama").draft("Acme (DE)", a, rec, ctx)
+
+    assert draft.status == "pending_review"
+    assert draft.subject.startswith("THE CUSTOMER")
+    assert draft.body.startswith("Dear Acme team")
+
+
+def test_writer_rejects_body_sentence_with_claim_missing_from_claim_list():
+    import json
+
+    class UnlistedClaimSpy(WriterAgent):
+        verifier_calls = 0
+
+        def _complete(self, system, prompt):
+            if "strict evidence verifier" in system:
+                self.verifier_calls += 1
+                return json.dumps({"draft_supported": True,
+                                   "claim_checks": [{"claim_index": 0, "supported": True}]})
+            return json.dumps({
+                "status": "OK",
+                "subject": "Quality follow-up",
+                "body": "Complaint about shrinkage. Please call us, as the customer requested a refund.",
+                "claims": [{"text": "Complaint about shrinkage.",
+                            "evidence": [{"doc_id": "X-0", "quote": "Complaint about shrinkage."}]}],
+            })
+
+    a = AccountAssessment("X", 1000, 0.8, 800, "high", [])
+    rec = Recommendation("r", "escalate_quality_review", "call", "am", "why")
+    ctx = [{"text": "Complaint about shrinkage.",
+            "metadata": {"doc_id": "X-0", "doc_type": "ticket"}}]
+    writer = UnlistedClaimSpy(None, "m", backend="ollama")
+
+    draft = writer.draft("Acme (DE)", a, rec, ctx)
+
+    assert writer.verifier_calls == 0
+    assert draft.status == "pending_review"
+    assert "refund" not in draft.body.lower()
 
 
 def test_trust_metrics_control_group_and_outcomes():
